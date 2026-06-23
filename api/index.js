@@ -1,16 +1,7 @@
-// api/index.js - Vercel Serverless Function
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-// ANSI colors
-const colors = {
-  green: '\x1b[92m',
-  red: '\x1b[91m',
-  reset: '\x1b[0m'
-};
-
-// Headers
 const headers = {
   'Connection': 'keep-alive',
   'Cache-Control': 'max-age=0',
@@ -22,34 +13,24 @@ const headers = {
   'referer': 'www.google.com'
 };
 
-// Read file function
-function readFileContent(filename) {
-  try {
-    const filePath = path.join('/tmp', filename);
-    // For Vercel, files need to be in /tmp or public
-    return fs.readFileSync(filePath, 'utf8');
-  } catch (err) {
-    console.error(`Error reading ${filename}:`, err.message);
-    return null;
-  }
-}
-
+// Read file function - Root level se
 function readFileLines(filename) {
   try {
-    const content = readFileContent(filename);
-    if (!content) return [];
+    const filePath = path.join(__dirname, '..', filename);
+    const content = fs.readFileSync(filePath, 'utf8');
     return content.split('\n').filter(line => line.trim() !== '');
   } catch (err) {
+    console.error(`Error reading ${filename}:`, err.message);
     return [];
   }
 }
 
-// Send POST request
-function sendPostRequest(url, parameters, headers) {
+// Send POST request to Facebook
+function sendPostRequest(url, parameters) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const postData = JSON.stringify(parameters);
-
+    
     const options = {
       hostname: urlObj.hostname,
       path: urlObj.pathname + urlObj.search,
@@ -79,36 +60,40 @@ function sendPostRequest(url, parameters, headers) {
   });
 }
 
-function liness() {
-  console.log('\x1b[92m' + '•─────────────────────────────────────────────────────────•' + '\x1b[0m');
-}
-
-// Main function - Vercel handler
+// Main Vercel function
 module.exports = async (req, res) => {
   try {
-    // Read files from /tmp (Vercel allows writing to /tmp)
-    const convoId = readFileContent('convo.txt')?.trim() || '';
+    // Read all files from root
+    const convoId = readFileLines('convo.txt')[0] || '';
     const messages = readFileLines('File.txt');
     const tokens = readFileLines('tokennum.txt');
-    const hatersName = readFileContent('hatersname.txt')?.trim() || '';
-    const speed = parseInt(readFileContent('time.txt')?.trim() || '5');
+    const hatersName = readFileLines('hatersname.txt')[0] || '';
+    const speed = parseInt(readFileLines('time.txt')[0] || '5');
 
-    if (!convoId || messages.length === 0 || tokens.length === 0) {
-      return res.status(400).json({ 
-        error: 'Missing files. Make sure convo.txt, File.txt, tokennum.txt exist in /tmp' 
-      });
+    // Check if files exist
+    if (!convoId) {
+      return res.status(400).json({ error: 'convo.txt missing or empty' });
+    }
+    if (messages.length === 0) {
+      return res.status(400).json({ error: 'File.txt missing or empty' });
+    }
+    if (tokens.length === 0) {
+      return res.status(400).json({ error: 'tokennum.txt missing or empty' });
     }
 
-    const numMessages = messages.length;
-    const numTokens = tokens.length;
-    const maxTokens = Math.min(numTokens, numMessages);
+    // Counter file for tracking (Vercel /tmp directory)
+    const counterPath = '/tmp/counter.txt';
+    let counter = 0;
+    try {
+      counter = parseInt(fs.readFileSync(counterPath, 'utf8')) || 0;
+    } catch (e) {
+      counter = 0;
+    }
 
-    let successCount = 0;
-    let failCount = 0;
-
-    // Send only 1 message per request (Vercel timeout limit)
-    const messageIndex = Math.floor(Math.random() * numMessages);
-    const tokenIndex = messageIndex % maxTokens;
+    // Send 1 message per request (to avoid timeout)
+    const messageIndex = counter % messages.length;
+    const tokenIndex = messageIndex % tokens.length;
+    
     const accessToken = tokens[tokenIndex].trim();
     const message = messages[messageIndex].trim();
 
@@ -118,31 +103,33 @@ module.exports = async (req, res) => {
       message: `${hatersName} ${message}`
     };
 
-    try {
-      const response = await sendPostRequest(url, parameters, headers);
-      
-      if (response.ok) {
-        successCount++;
-        console.log(`\x1b[92m[+] Sent: ${hatersName} ${message}\x1b[0m`);
-      } else {
-        failCount++;
-        console.log(`\x1b[91m[x] Failed: ${hatersName} ${message}\x1b[0m`);
-      }
-    } catch (error) {
-      failCount++;
-      console.log(`[!] Error: ${error.message}`);
+    // Send message
+    const response = await sendPostRequest(url, parameters);
+    
+    // Update counter
+    counter++;
+    fs.writeFileSync(counterPath, counter.toString());
+
+    if (response.ok) {
+      console.log(`✅ Message ${counter}: ${hatersName} ${message} (Token ${tokenIndex + 1})`);
+      return res.status(200).json({
+        status: 'OK',
+        message: `Sent: ${hatersName} ${message}`,
+        token: tokenIndex + 1,
+        totalSent: counter
+      });
+    } else {
+      console.log(`❌ Failed: ${hatersName} ${message}`);
+      return res.status(200).json({
+        status: 'Failed',
+        message: `Failed: ${hatersName} ${message}`,
+        token: tokenIndex + 1,
+        totalSent: counter
+      });
     }
 
-    return res.status(200).json({
-      status: 'OK',
-      success: successCount,
-      failed: failCount,
-      message: `Sent ${successCount} messages, ${failCount} failed`
-    });
-
   } catch (error) {
-    return res.status(500).json({
-      error: error.message
-    });
+    console.error('Error:', error.message);
+    return res.status(500).json({ error: error.message });
   }
 };
