@@ -1,8 +1,0 @@
-{
-  "name": "fb-vercel-sender",
-  "version": "1.0.0",
-  "main": "api/index.js",
-  "scripts": {
-    "vercel-build": "echo 'Build done'"
-  }
-}
